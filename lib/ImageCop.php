@@ -43,6 +43,13 @@ class ImageCop
     public $bucket;
 
     /**
+     * AWS region
+     *
+     * @var string
+     */
+    public $region;
+
+    /**
      * Just a place to store the
      * generic amazon s3 url.
      *
@@ -55,7 +62,7 @@ class ImageCop
      * local file uploads in wordpress.
      * Will default to false;
      *
-     * @var [type]
+     * @var boolean
      */
     public $keepLocalFiles;
 
@@ -69,22 +76,34 @@ class ImageCop
     public function __construct(array $options = null)
     {
         $this->options = $options;
+        $this->addOptions();
 
+        $dbOptions = self::getOptions();
+
+        // optional parameters.
+        $this->s3UploadDirectory     = $dbOptions['upload_folder'];
+        $this->s3CompressedDirectory = $dbOptions['compressed_folder'];
+        $this->bucket                = $dbOptions['bucket'];
+        $this->keepLocalFiles        = $dbOptions['keep_local_files'];
+        $this->region                = $dbOptions['region'];
+        $this->prefix                = 'https://s3.amazonaws.com/';
+
+        // call all boot logic.
+        $this->boot();
+    }
+
+    /**
+     * Add options to Wordpress
+     *
+     * @return void
+     */
+    protected function addOptions()
+    {
         add_option('image_cop_bucket');
         add_option('image_cop_upload_folder');
         add_option('image_cop_compressed_folder');
         add_option('image_cop_keep_local_files');
-
-        $dbOptions = self::getOptions();
-        // optional parameters.
-        $this->s3UploadDirectory = $dbOptions['upload_folder'];
-        $this->s3CompressedDirectory = $dbOptions['compressed_folder'];
-        $this->bucket = $dbOptions['bucket'];
-        $this->keepLocalFiles = $dbOptions['keep_local_files'];
-        $this->prefix = 'https://s3.amazonaws.com/';
-
-        // call all boot logic.
-        $this->boot();
+        add_option('image_cop_region');
     }
 
     /**
@@ -92,17 +111,20 @@ class ImageCop
      *
      * @return void
      */
-    protected function checkKeys(array $options = null){
+    protected function checkKeys(array $options = null)
+    {
+        $keysToCheck = [
+            'IMAGE_COP_AWS_ACCESS_KEY_ID'       => 'access_key_id',
+            'IMAGE_COP_AWS_SECRET_ACCESS_KEY'   => 'secret_access_key',
+            'IMAGE_COP_AWS_REGION'              => 'region',
+        ];
 
-        // Check if aws key id is defined.
-        if( ! defined('IMAGE_COP_AWS_ACCESS_KEY_ID') && ! isset($this->options['access_key_id']) ){
-            throw new Exception('IMAGE_COP_AWS_ACCESS_KEY_ID is not defined, or access_key_id not defined in constructor.');
+        foreach ($keysToCheck as $key => $value) {
+            if (!defined($key) && !isset($this->options[$value])) {
+                throw new Exception( $key . ' is not defined, or ' . $value . ' not defined in constructor.');
+            }
         }
 
-        // Check if aws key id is defined.
-        if( ! defined('IMAGE_COP_AWS_SECRET_ACCESS_KEY') && ! isset($this->options['secret_access_key']) ){
-            throw new Exception('IMAGE_COP_AWS_SECRET_ACCESS_KEY is not defined, or secret_access_key not defined in constructor.');
-        }
         return true;
     }
 
@@ -112,11 +134,12 @@ class ImageCop
      *
      * @return void
      */
-    protected function resolveKeys(){
-
-        if($this->checkKeys()){
-            $this->accessKeyId = ( defined('IMAGE_COP_AWS_ACCESS_KEY_ID') ) ? IMAGE_COP_AWS_ACCESS_KEY_ID : $this->options['access_key_id'];
-            $this->secretKey = ( defined('IMAGE_COP_AWS_SECRET_ACCESS_KEY') ) ? IMAGE_COP_AWS_SECRET_ACCESS_KEY : $this->options['secret_access_key'];
+    protected function resolveKeys()
+    {
+        if ($this->checkKeys()) {
+            $this->accessKeyId = (defined('IMAGE_COP_AWS_ACCESS_KEY_ID')) ? IMAGE_COP_AWS_ACCESS_KEY_ID : $this->options['access_key_id'];
+            $this->secretKey   = (defined('IMAGE_COP_AWS_SECRET_ACCESS_KEY')) ? IMAGE_COP_AWS_SECRET_ACCESS_KEY : $this->options['secret_access_key'];
+            $this->region      = (defined('IMAGE_COP_AWS_REGION')) ? IMAGE_COP_AWS_REGION : $this->options['region'];
         }
     }
 
@@ -137,9 +160,9 @@ class ImageCop
          * These hooks are used to swap out media
          * urls in both admin areas and front end.
          */
-        add_filter('the_content', [ $this, 'replacePublicUrlsWithS3']);
-        add_filter('wp_generate_attachment_metadata', [ $this, 'handleMediaUpload']);
-        add_filter('pre_option_upload_url_path', [ $this, 'alterAttachmentSrc']);
+        add_filter('the_content', [$this, 'replacePublicUrlsWithS3']);
+        add_filter('wp_generate_attachment_metadata', [$this, 'handleMediaUpload']);
+        add_filter('pre_option_upload_url_path', [$this, 'alterAttachmentSrc']);
         add_filter('delete_attachment', [$this, 'handleMediaDelete']);
     }
 
@@ -185,7 +208,8 @@ class ImageCop
         return $this->getPublicBucketUrl() . '/wp-content/uploads';
     }
 
-    protected function getPublicBucketUrl(){
+    protected function getPublicBucketUrl()
+    {
         return $this->prefix . $this->bucket . '/' . $this->s3CompressedDirectory;
     }
 
@@ -200,7 +224,7 @@ class ImageCop
     public function handleMediaUpload($metadata, $attachment_id = null)
     {
         $baseDir = str_replace(basename($metadata['file']), '', $metadata['file']);
-        $path = ABSPATH . 'wp-content/uploads/' . $metadata['file'];
+        $path    = ABSPATH . 'wp-content/uploads/' . $metadata['file'];
     
         // upload the full sized image
         $this->upload($path);
@@ -227,8 +251,8 @@ class ImageCop
      * @param integer $post_id
      * @return void
      */
-    public function handleMediaDelete($post_id){
-
+    public function handleMediaDelete($post_id)
+    {
     }
 
     /**
@@ -240,7 +264,7 @@ class ImageCop
      */
     protected function delete(string $path)
     {
-        if( ! $this->keepLocalFiles){
+        if (!$this->keepLocalFiles) {
             wp_delete_file($path);
         }
     }
@@ -256,10 +280,10 @@ class ImageCop
     {
         try {
             $this->s3->putObject([
-                'Bucket'        =>  $this->bucket,
-                'Key'           =>  $this->s3UploadDirectory . '/' . str_replace(ABSPATH, '', $path),
-                'ACL'           =>  $acl,
-                'SourceFile'    =>  $path
+                'Bucket'        => $this->bucket,
+                'Key'           => $this->s3UploadDirectory . '/' . str_replace(ABSPATH, '', $path),
+                'ACL'           => $acl,
+                'SourceFile'    => $path
             ]);
         } catch (Exception $e) {
             error_log($e->getMessage());
@@ -271,12 +295,14 @@ class ImageCop
      *
      * @return void
      */
-    public static function getOptions(){
+    public static function getOptions()
+    {
         return [
-            'bucket'            =>  get_option('image_cop_bucket', 'image-cop'),
-            'upload_folder'     =>  get_option('image_cop_upload_folder', 'upload'),
-            'compressed_folder' =>  get_option('image_cop_public_folder', 'compressed'),
-            'keep_local_files'  =>  get_option('image_cop_keep_local_files', false),
+            'bucket'            => get_option('image_cop_bucket', 'image-cop'),
+            'upload_folder'     => get_option('image_cop_upload_folder', 'upload'),
+            'compressed_folder' => get_option('image_cop_public_folder', 'compressed'),
+            'keep_local_files'  => get_option('image_cop_keep_local_files', false),
+            'region'            => get_option('image_cop_region', 'us-east-1'),
         ];
     }
 }
