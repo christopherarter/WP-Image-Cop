@@ -1,0 +1,13 @@
+{
+    "name": "carter/imagecop",
+    "description": "Wordpress client for ImageCop",
+    "authors": [
+        {
+            "name": "Christopher Arter",
+            "email": "carter@partnercomm.net"
+        }
+    ],
+    "require": {
+        "aws/aws-sdk-php": "^3.87"
+    }
+}
